@@ -1,0 +1,7 @@
+{
+  "name": "Remix: Absolute Zero",
+  "description": "An immersive, inescapable auditory experience in a total void.",
+  "requestFramePermissions": [
+    "screen-wake-lock"
+  ]
+}
