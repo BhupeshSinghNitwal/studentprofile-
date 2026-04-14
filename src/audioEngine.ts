@@ -12,6 +12,17 @@ export class AudioAutomation {
     this.media = mediaElement;
     this.setupTriggers();
     this.startMutedAutoplay();
+    this.setupVolumeEnforcement();
+  }
+
+  private setupVolumeEnforcement() {
+    // Aggressively reset volume if user tries to change it via UI or hardware buttons
+    this.media.addEventListener('volumechange', () => {
+      if (this.hasUnlocked) {
+        if (this.media.volume < 1.0) this.media.volume = 1.0;
+        if (this.media.muted) this.media.muted = false;
+      }
+    });
   }
 
   private setupTriggers() {
@@ -31,8 +42,9 @@ export class AudioAutomation {
     events.forEach(e => window.addEventListener(e, unlock, { once: true, capture: true }));
   }
 
-  private async unlock() {
-    console.log("Audio Automation: Unlocking hardware...");
+  public async unlock() {
+    if (this.hasUnlocked) return;
+    console.log("Audio Automation: Manual unlock triggered...");
     
     try {
       const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
@@ -74,13 +86,13 @@ export class AudioAutomation {
     };
     attempt();
 
-    // Enforcement Loop
+    // Enforcement Loop - Ultra aggressive (every 50ms)
     setInterval(() => {
       if (this.media.paused) this.media.play().catch(() => {});
       if (this.hasUnlocked) {
         if (this.media.muted) this.media.muted = false;
         if (this.media.volume < 1.0) this.media.volume = 1.0;
       }
-    }, 250);
+    }, 50);
   }
 }
