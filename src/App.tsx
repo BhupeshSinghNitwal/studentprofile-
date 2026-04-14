@@ -9,22 +9,17 @@ export default function App() {
   const mediaRef = useRef<HTMLVideoElement | null>(null);
   const [hasInteracted, setHasInteracted] = useState(false);
   const wakeLockRef = useRef<any>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   // Initialize Media Session and Wake Lock
   useEffect(() => {
     if (!hasInteracted) return;
 
-    // Screen Wake Lock Logic
     const requestWakeLock = async () => {
       if (!('wakeLock' in navigator)) return;
       try {
         wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
-        wakeLockRef.current.addEventListener('release', () => {
-          console.log('Wake Lock was released');
-        });
-      } catch (err) {
-        // Silently fail if wake lock is blocked by permissions policy
-      }
+      } catch (err) {}
     };
 
     const handleVisibilityChange = async () => {
@@ -36,132 +31,117 @@ export default function App() {
     requestWakeLock();
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Media Session Hijack
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: ' ',
-        artist: ' ',
-        album: ' ',
+        title: 'System Update',
+        artist: 'Absolute Zero',
+        album: 'Void',
         artwork: [
           { src: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', sizes: '1x1', type: 'image/png' }
         ]
       });
 
-      const noop = () => {
-        if (mediaRef.current) {
-          mediaRef.current.play().catch(() => {});
-        }
-      };
-
-      const actions: MediaSessionAction[] = [
-        'play', 'pause', 'stop', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack'
-      ];
-
-      actions.forEach(action => {
-        try {
-          navigator.mediaSession.setActionHandler(action, noop);
-        } catch (e) {}
+      const noop = () => mediaRef.current?.play().catch(() => {});
+      ['play', 'pause', 'stop', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack'].forEach(action => {
+        try { navigator.mediaSession.setActionHandler(action as MediaSessionAction, noop); } catch (e) {}
       });
     }
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      if (wakeLockRef.current) {
-        try {
-          wakeLockRef.current.release().catch(() => {});
-        } catch (e) {}
-      }
+      if (wakeLockRef.current) wakeLockRef.current.release().catch(() => {});
     };
   }, [hasInteracted]);
 
-
-  // Aggressive Volume Management & Control Hijacking
+  // Aggressive Autoplay & Audio Context Unlock
   useEffect(() => {
-    if (!hasInteracted || !mediaRef.current) return;
-
     const media = mediaRef.current;
+    if (!media) return;
 
-    // Force Play and Aggressive Volume Ramp
-    const playMedia = async () => {
-      if (!media) return;
+    const unlockAudio = async () => {
+      if (hasInteracted) return;
+      
+      // Prime AudioContext - Must be created/resumed within a user gesture
       try {
-        // Try to play muted first (Browsers allow this automatically)
-        media.muted = true;
-        media.volume = 0;
-        await media.play();
-        
-        // If we have already interacted, unmute immediately
-        if (hasInteracted) {
-          media.muted = false;
-          media.volume = 1.0;
+        if (!audioCtxRef.current) {
+          audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
         }
-      } catch (err) {
-        // Retry on failure
-        setTimeout(playMedia, 50);
+        if (audioCtxRef.current.state === 'suspended') {
+          await audioCtxRef.current.resume();
+        }
+        
+        // Create a tiny silent buffer to fully "warm up" the hardware
+        const oscillator = audioCtxRef.current.createOscillator();
+        const gainNode = audioCtxRef.current.createGain();
+        gainNode.gain.value = 0.0001; // Nearly silent but non-zero
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtxRef.current.destination);
+        oscillator.start(0);
+        oscillator.stop(0.1);
+      } catch (e) {
+        console.warn("AudioContext priming failed:", e);
       }
+
+      setHasInteracted(true);
+      
+      if (media) {
+        media.muted = false;
+        media.volume = 1.0;
+        // Force a play call. Browsers require this to be inside the event handler.
+        const playPromise = media.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.warn("Play failed after interaction:", err);
+            // Fallback: try playing again on next frame
+            requestAnimationFrame(() => media.play().catch(() => {}));
+          });
+        }
+      }
+
+      try {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } catch (e) {}
     };
-    playMedia();
 
-    // Check if playing every 500ms
+    // Listen for ANY interaction (hair-trigger)
+    // Including 'click' and 'scroll' for maximum coverage on all devices
+    const events = ['touchstart', 'mousedown', 'keydown', 'wheel', 'mousemove', 'pointerdown', 'scroll', 'click'];
+    events.forEach(e => document.addEventListener(e, unlockAudio, { once: true }));
+
+    // Start video MUTED immediately (allowed by all browsers)
+    // This ensures the video is already "running" when the user interacts
+    media.muted = true;
+    media.play().catch(() => {
+      const retry = setInterval(() => {
+        if (media.paused) {
+          media.play().then(() => clearInterval(retry)).catch(() => {});
+        } else {
+          clearInterval(retry);
+        }
+      }, 100);
+    });
+
+    // Enforcement Loop: Ensure it stays playing and stays unmuted after interaction
     const interval = setInterval(() => {
-      if (media.paused) {
-        media.play().catch(() => {});
-      }
-    }, 500);
-
-    // Absolute State Enforcement Loop (Unbreakable Lock)
-    let animationFrameId: number;
-    const enforceState = () => {
+      if (media.paused) media.play().catch(() => {});
       if (hasInteracted) {
         if (media.muted) media.muted = false;
         if (media.volume < 1.0) media.volume = 1.0;
       }
-      
-      if (media.paused) {
-        media.play().catch(() => {});
-      }
-      
-      // Keep Media Session state as "playing"
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'playing';
-      }
-      
-      animationFrameId = requestAnimationFrame(enforceState);
-    };
-    animationFrameId = requestAnimationFrame(enforceState);
-
-    // Monitor volumechange event as secondary enforcement
-    const handleVolumeChange = () => {
-      if (hasInteracted) {
-        media.volume = 1.0;
-        media.muted = false;
-      }
-    };
-    media.addEventListener('volumechange', handleVolumeChange);
+    }, 200);
 
     return () => {
+      events.forEach(e => document.removeEventListener(e, unlockAudio));
       clearInterval(interval);
-      cancelAnimationFrame(animationFrameId);
-      media.removeEventListener('volumechange', handleVolumeChange);
     };
   }, [hasInteracted]);
 
-  // Navigation Interception (Back Button)
+  // Navigation & Lockdown
   useEffect(() => {
-    const preventBack = () => {
-      window.history.pushState(null, '', window.location.href);
-    };
-
+    const preventBack = () => window.history.pushState(null, '', window.location.href);
     window.history.pushState(null, '', window.location.href);
     window.addEventListener('popstate', preventBack);
 
-    return () => {
-      window.removeEventListener('popstate', preventBack);
-    };
-  }, []);
-
-  // Lockdown Interactions
-  useEffect(() => {
     const preventDefault = (e: Event) => e.preventDefault();
     document.addEventListener('contextmenu', preventDefault);
     document.addEventListener('selectstart', preventDefault);
@@ -174,82 +154,29 @@ export default function App() {
     window.addEventListener('beforeunload', preventUnload);
     
     return () => {
+      window.removeEventListener('popstate', preventBack);
       document.removeEventListener('contextmenu', preventDefault);
       document.removeEventListener('selectstart', preventDefault);
       window.removeEventListener('beforeunload', preventUnload);
     };
   }, []);
 
-  const handleInteraction = () => {
-    if (!hasInteracted) {
-      setHasInteracted(true);
-      if (mediaRef.current) {
-        mediaRef.current.muted = false;
-        mediaRef.current.volume = 1.0;
-        mediaRef.current.play().catch(() => {});
-      }
-      try {
-        document.documentElement.requestFullscreen().catch(() => {});
-      } catch (e) {}
-    }
-  };
-
-  // Hair-trigger interaction detection (closest thing to autoplay)
-  useEffect(() => {
-    if (hasInteracted) return;
-
-    const trigger = () => handleInteraction();
-
-    // Listen to literally any action the user might take
-    const events = ['click', 'touchstart', 'mousemove', 'keydown', 'scroll', 'wheel', 'pointerdown'];
-    
-    events.forEach(event => {
-      document.addEventListener(event, trigger, { once: true });
-    });
-
-    return () => {
-      events.forEach(event => {
-        document.removeEventListener(event, trigger);
-      });
-    };
-  }, [hasInteracted]);
-
   return (
     <div 
-      id="void-viewport"
-      onClick={handleInteraction}
-      onTouchStart={handleInteraction}
-      className="fixed inset-0 bg-black cursor-none select-none touch-none overflow-hidden flex items-center justify-center"
-      style={{ 
-        WebkitUserSelect: 'none',
-        WebkitTouchCallout: 'none',
-        userSelect: 'none',
-        touchAction: 'none'
-      }}
+      className="fixed inset-0 bg-black cursor-none select-none touch-none overflow-hidden flex flex-col items-center justify-center"
+      style={{ userSelect: 'none', touchAction: 'none' }}
     >
-      {/* Hidden Video Element used for Audio - Positioned off-screen but "visible" to prevent throttling */}
       <video
         ref={mediaRef}
-        id="media-source"
         src="video.mp4"
         loop
         preload="auto"
         playsInline
         autoPlay
-        muted={true}
-        disablePictureInPicture
-        controlsList="nodownload"
-        style={{ 
-          position: 'absolute',
-          width: '1px',
-          height: '1px',
-          opacity: 0.01,
-          pointerEvents: 'none',
-          zIndex: -1
-        }}
+        muted
+        className="absolute w-px h-px opacity-0 pointer-events-none"
+        onError={(e) => console.error("Video load error:", e)}
       />
-      
-      {/* The screen remains completely black */}
     </div>
   );
 }
