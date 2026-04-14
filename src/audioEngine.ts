@@ -56,9 +56,26 @@ export class AudioAutomation {
         await this.audioCtx.resume();
       }
 
+      // Monitor state changes to ensure it stays running
+      this.audioCtx?.addEventListener('statechange', () => {
+        if (this.audioCtx?.state === 'suspended') {
+          this.audioCtx.resume().catch(() => {});
+        }
+      });
+
       this.hasUnlocked = true;
       this.media.muted = false;
       this.media.volume = 1.0;
+
+      // Keep-alive oscillator (silent)
+      if (this.audioCtx) {
+        const osc = this.audioCtx.createOscillator();
+        const silentGain = this.audioCtx.createGain();
+        silentGain.gain.value = 0.00001;
+        osc.connect(silentGain);
+        silentGain.connect(this.audioCtx.destination);
+        osc.start();
+      }
 
       const playPromise = this.media.play();
       if (playPromise !== undefined) {
