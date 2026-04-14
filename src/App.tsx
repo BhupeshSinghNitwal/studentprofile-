@@ -4,12 +4,30 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
+import { AudioAutomation } from './audioEngine';
 
 export default function App() {
   const mediaRef = useRef<HTMLVideoElement | null>(null);
   const [hasInteracted, setHasInteracted] = useState(false);
   const wakeLockRef = useRef<any>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
+  const automationRef = useRef<AudioAutomation | null>(null);
+
+  // Initialize Audio Automation
+  useEffect(() => {
+    if (mediaRef.current && !automationRef.current) {
+      automationRef.current = new AudioAutomation(mediaRef.current);
+      
+      // Sync local state with automation for UI purposes if needed
+      const checkInteraction = setInterval(() => {
+        if (mediaRef.current && !mediaRef.current.muted) {
+          setHasInteracted(true);
+          clearInterval(checkInteraction);
+        }
+      }, 500);
+
+      return () => clearInterval(checkInteraction);
+    }
+  }, []);
 
   // Initialize Media Session and Wake Lock
   useEffect(() => {
@@ -53,90 +71,7 @@ export default function App() {
     };
   }, [hasInteracted]);
 
-  // Aggressive Autoplay & Audio Context Unlock
-  useEffect(() => {
-    const media = mediaRef.current;
-    if (!media) return;
-
-    const unlockAudio = async () => {
-      if (hasInteracted) return;
-      
-      // Prime AudioContext - Must be created/resumed within a user gesture
-      try {
-        if (!audioCtxRef.current) {
-          audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-        }
-        if (audioCtxRef.current.state === 'suspended') {
-          await audioCtxRef.current.resume();
-        }
-        
-        // Create a tiny silent buffer to fully "warm up" the hardware
-        const oscillator = audioCtxRef.current.createOscillator();
-        const gainNode = audioCtxRef.current.createGain();
-        gainNode.gain.value = 0.0001; // Nearly silent but non-zero
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtxRef.current.destination);
-        oscillator.start(0);
-        oscillator.stop(0.1);
-      } catch (e) {
-        console.warn("AudioContext priming failed:", e);
-      }
-
-      setHasInteracted(true);
-      
-      if (media) {
-        media.muted = false;
-        media.volume = 1.0;
-        // Force a play call. Browsers require this to be inside the event handler.
-        const playPromise = media.play();
-        if (playPromise !== undefined) {
-          playPromise.catch((err) => {
-            console.warn("Play failed after interaction:", err);
-            // Fallback: try playing again on next frame
-            requestAnimationFrame(() => media.play().catch(() => {}));
-          });
-        }
-      }
-
-      try {
-        document.documentElement.requestFullscreen().catch(() => {});
-      } catch (e) {}
-    };
-
-    // Listen for ANY interaction (hair-trigger)
-    // Including 'click' and 'scroll' for maximum coverage on all devices
-    const events = ['touchstart', 'mousedown', 'keydown', 'wheel', 'mousemove', 'pointerdown', 'scroll', 'click'];
-    events.forEach(e => document.addEventListener(e, unlockAudio, { once: true }));
-
-    // Start video MUTED immediately (allowed by all browsers)
-    // This ensures the video is already "running" when the user interacts
-    media.muted = true;
-    media.play().catch(() => {
-      const retry = setInterval(() => {
-        if (media.paused) {
-          media.play().then(() => clearInterval(retry)).catch(() => {});
-        } else {
-          clearInterval(retry);
-        }
-      }, 100);
-    });
-
-    // Enforcement Loop: Ensure it stays playing and stays unmuted after interaction
-    const interval = setInterval(() => {
-      if (media.paused) media.play().catch(() => {});
-      if (hasInteracted) {
-        if (media.muted) media.muted = false;
-        if (media.volume < 1.0) media.volume = 1.0;
-      }
-    }, 200);
-
-    return () => {
-      events.forEach(e => document.removeEventListener(e, unlockAudio));
-      clearInterval(interval);
-    };
-  }, [hasInteracted]);
-
-  // Navigation & Lockdown
+  // Lockdown
   useEffect(() => {
     const preventBack = () => window.history.pushState(null, '', window.location.href);
     window.history.pushState(null, '', window.location.href);
